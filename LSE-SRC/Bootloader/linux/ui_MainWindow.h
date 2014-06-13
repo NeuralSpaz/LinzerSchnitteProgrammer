@@ -6,6 +6,7 @@
 ** WARNING! All changes made in this file will be lost when recompiling UI file!
 ********************************************************************************/
 
+
 #ifndef UI_MAINWINDOW_H
 #define UI_MAINWINDOW_H
 
