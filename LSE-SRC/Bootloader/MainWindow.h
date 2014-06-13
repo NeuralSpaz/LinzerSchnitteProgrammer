@@ -71,6 +71,9 @@ public:
     void CopyBufferToScreen();
     void ScreenToBuffer();
     void HexDumpBuffer();
+    void RecalculateFrequencySpacing ();
+    void UpdateNumberOfTones();
+    void ReadDeviceRDSaddress ();
 
 signals:
     void IoWithDeviceCompleted(QString msg, Comm::ErrorCode, double time);
@@ -148,6 +151,17 @@ private slots:
     void on_actionRadioButtonRGBEnable_triggered();
     void on_actionResetButton_triggered();
 
+    void on_FreqSpacing_returnPressed();
+    void on_CycleTime_returnPressed();
+
+    void on_Tone1_returnPressed();
+    void on_Tone2_returnPressed();
+    void on_Tone3_returnPressed();
+    void on_Tone4_returnPressed();
+    void on_Tone5_returnPressed();
+    void on_Tone6_returnPressed();
+
+    void on_actionLSE_Help_Resources_triggered();
 };
 
 #endif // MAINWINDOW_H

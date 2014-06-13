@@ -60,6 +60,13 @@ bool deviceFirmwareIsAtLeast101 = false;
 Comm::ExtendedQueryInfo extendedBootInfo;
 
 unsigned char DataBuffer[0x200];  // buffer for eeprom data
+int N;
+int NumTones;
+int FreqSpacing;
+int SampleTime;
+int CycleTime;
+
+int ADDR;
 
 #define eemap_boot_mode 0
 #define eemap_firmware_version_major 1
@@ -67,8 +74,8 @@ unsigned char DataBuffer[0x200];  // buffer for eeprom data
 #define eemap_startup_mode 3
 #define eemap_output_mode 4
 #define eemap_number_of_tones 5
+#define eemap_number_of_samples 6
 
-#define eemap_tone_spacing 6
 #define eemap_device_serial 8
 #define eemap_radio_frequency 10
 
@@ -84,6 +91,8 @@ unsigned char DataBuffer[0x200];  // buffer for eeprom data
 
 #define eemap_pattern_on 28
 #define eemap_pattern_off 29
+#define eemap_fade_on 30
+#define eemap_fade_off 31
 
 #define eemap_group_address1 32
 #define eemap_group_address2 34
@@ -91,6 +100,11 @@ unsigned char DataBuffer[0x200];  // buffer for eeprom data
 #define eemap_group_address4 38
 #define eemap_group_address5 40
 #define eemap_group_address6 42
+
+#define eemap_antenna_type_address 44
+#define eemap_serial_mode 45
+#define eemap_save_station 46
+#define bitmap 48
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindowClass)
 {
@@ -166,7 +180,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     //Update the file list in the File-->[import files list] area, so the user can quickly re-load a previously used .hex file.
     UpdateRecentFileList();
 
-
     timer->start(1000); //Check for future USB connection status changes every 1000 milliseconds.
 }
 
@@ -214,9 +227,6 @@ void MainWindow::Connection(void)
             comm->open();
             ui->plainTextEdit->setPlainText("Device Attached.");
             ui->plainTextEdit->appendPlainText("Connecting...");
-
-            // read eeprom
-
             GetQuery();
         }
         else
@@ -1144,6 +1154,7 @@ void MainWindow::GetQuery()
             wasBootloaderMode = true;
             ss << "Device Ready";
             deviceLabel.setText("Connected");
+            ReadDeviceRDSaddress();
             break;
         default:
             return;
@@ -1238,10 +1249,9 @@ void MainWindow::GetQuery()
 
             ///ui->plainTextEdit->appendPlainText("EEPROM Details\n");
 
-            ee << "EEPROM " << bootInfo.memoryRegions[i].size << " Addresses  \n";
-            ee << "EEPROM " << device->bytesPerAddressEEPROM << " Bytes per Address  \n";
-
-            ui->plainTextEdit->appendPlainText(eeMsg);
+            //ee << "EEPROM " << bootInfo.memoryRegions[i].size << " Addresses  \n";
+            //ee << "EEPROM " << device->bytesPerAddressEEPROM << " Bytes per Address  \n";
+            //ui->plainTextEdit->appendPlainText(eeMsg);
 
         }
         else if(bootInfo.memoryRegions[i].type == CONFIG_MEMORY)
@@ -1361,6 +1371,26 @@ void MainWindow::on_actionReset_Device_triggered()
     comm->Reset();
 }
 
+void MainWindow::RecalculateFrequencySpacing ()
+{
+    QString x;
+    bool ok;
+
+    NumTones = ui->NumTones->text().toInt(&ok,10);
+    N = ui->N->text().toInt(&ok,10);
+
+    SampleTime = (N * 27)/1000;
+    CycleTime = NumTones * SampleTime;
+    FreqSpacing = 1350/SampleTime;
+
+    x.sprintf("%d",FreqSpacing); ui->FreqSpacing->setText(x);
+    x.sprintf("%d",SampleTime); ui->SampleTime->setText(x);
+    x.sprintf("%d",CycleTime); ui->CycleTime->setText(x);
+
+
+}
+
+
 
 void MainWindow::CopyBufferToScreen()
 {
@@ -1371,11 +1401,24 @@ void MainWindow::CopyBufferToScreen()
     QTextStream ee(&eeMsg);
     float f;
     int freq;
+    int newADDR;
 
+    int R0H,R0L,R1H,R1L,R2H,R2L,R3H,R3L;
+    int f1,f2,f3,f4,f5,f6;
+    int fadeOn, fadeOff;
+    int PatternOn, PatternOff;
+
+    if (DataBuffer[eemap_serial_mode] == 0x01) { ui->GoertzelDisplay->setChecked(true); }
+    if (DataBuffer[eemap_serial_mode] == 0x02) { ui->RDSdataDisplay->setChecked(true); }
+    if (DataBuffer[eemap_serial_mode] == 0x03) { ui->RDSgroup6Display->setChecked(true); }
+    if (DataBuffer[eemap_serial_mode] == 0x04) { ui->rssiDisplay->setChecked(true); }
+    if (DataBuffer[eemap_serial_mode] == 0x05) { ui->bitmapDisplay->setChecked(true); }
 
     if (DataBuffer[eemap_output_mode] == 0x01) { ui->RadioButtonPWMDisable->setChecked(true); }
     if (DataBuffer[eemap_output_mode] == 0x02) { ui->RadioButtonPWMEnable->setChecked(true);  }
     if (DataBuffer[eemap_output_mode] == 0x03) { ui->RadioButtonRGBEnable->setChecked(true);  }
+    if (DataBuffer[eemap_output_mode] == 0x04) { ui->RadioButtonOutputToggle->setChecked(true);  }
+    if (DataBuffer[eemap_output_mode] == 0x05) { ui->RadioButtonPWMMagnitude->setChecked(true);  }
 
     if (DataBuffer[eemap_startup_mode] == 0x01) { ui->radioButtonBlink->setChecked(true);           }
     if (DataBuffer[eemap_startup_mode] == 0x02) { ui->radioButtonBreath->setChecked(true);          }
@@ -1384,34 +1427,268 @@ void MainWindow::CopyBufferToScreen()
     if (DataBuffer[eemap_startup_mode] == 0x05) { ui->radioButtonSignalStrength->setChecked(true);  }
     if (DataBuffer[eemap_startup_mode] == 0x06) { ui->radioButtonToneEnable->setChecked(true);      }
     if (DataBuffer[eemap_startup_mode] == 0x07) { ui->radioToneDecodeDisabled->setChecked(true);    }
+    if (DataBuffer[eemap_startup_mode] == 0x08) { ui->radioButtonBitMapMode->setChecked(true);    }
 
-    x.sprintf("%04X", DataBuffer[eemap_device_serial ]*256+DataBuffer[eemap_device_serial+1 ]); ui->DeviceAddress->setText(x);
+    if (DataBuffer[eemap_save_station] == 0x01) {  ui->radioButtonRememberStation->setChecked(true);     }
+    if (DataBuffer[eemap_save_station] == 0x00) {  ui->radioButtonRememberStation->setChecked(false);    }
+
+
+    if (DataBuffer[eemap_antenna_type_address] == 0x01)      {  ui->InternalAntenna->setChecked(true);     }
+    if (DataBuffer[eemap_antenna_type_address] == 0x00)      {  ui->InternalAntenna->setChecked(false);    }
+
+
+    newADDR=DataBuffer[eemap_device_serial ]*256+DataBuffer[eemap_device_serial+1 ];
+    if (ui->ForceAddressChange->isChecked()==true) {
+        x.sprintf("%04X",newADDR ); ui->DeviceAddress->setText(x);
+        ADDR=newADDR;
+    }
+    else {
+        x.sprintf("%04X",ADDR ); ui->DeviceAddress->setText(x);
+    }
+
     x.sprintf("%04X", DataBuffer[eemap_group_address1]*256+DataBuffer[eemap_group_address1+1]); ui->GroupAddress1->setText(x);
     x.sprintf("%04X", DataBuffer[eemap_group_address2]*256+DataBuffer[eemap_group_address2+1]); ui->GroupAddress2->setText(x);
     x.sprintf("%04X", DataBuffer[eemap_group_address3]*256+DataBuffer[eemap_group_address3+1]); ui->GroupAddress3->setText(x);
+    x.sprintf("%04X", DataBuffer[eemap_group_address4]*256+DataBuffer[eemap_group_address4+1]); ui->GroupAddress4->setText(x);
+    x.sprintf("%04X", DataBuffer[eemap_group_address5]*256+DataBuffer[eemap_group_address5+1]); ui->GroupAddress5->setText(x);
+    x.sprintf("%04X", DataBuffer[eemap_group_address6]*256+DataBuffer[eemap_group_address6+1]); ui->GroupAddress6->setText(x);
 
-    x.sprintf("%04d", DataBuffer[eemap_tone1]*256+DataBuffer[eemap_tone1+1]); ui->Tone1->setText(x);
-    x.sprintf("%04d", DataBuffer[eemap_tone2]*256+DataBuffer[eemap_tone2+1]); ui->Tone2->setText(x);
-    x.sprintf("%04d", DataBuffer[eemap_tone3]*256+DataBuffer[eemap_tone3+1]); ui->Tone3->setText(x);
-    x.sprintf("%04d", DataBuffer[eemap_tone4]*256+DataBuffer[eemap_tone4+1]); ui->Tone4->setText(x);
-    x.sprintf("%04d", DataBuffer[eemap_tone5]*256+DataBuffer[eemap_tone5+1]); ui->Tone5->setText(x);
-    x.sprintf("%04d", DataBuffer[eemap_tone6]*256+DataBuffer[eemap_tone6+1]); ui->Tone6->setText(x);
+    f1=DataBuffer[eemap_tone1]*256+DataBuffer[eemap_tone1+1];  if (f1==0xffff) { f1=0; }
+    f2=DataBuffer[eemap_tone2]*256+DataBuffer[eemap_tone2+1];  if (f2==0xffff) { f2=0; }
+    f3=DataBuffer[eemap_tone3]*256+DataBuffer[eemap_tone3+1];  if (f3==0xffff) { f3=0; }
+    f4=DataBuffer[eemap_tone4]*256+DataBuffer[eemap_tone4+1];  if (f4==0xffff) { f4=0; }
+    f5=DataBuffer[eemap_tone5]*256+DataBuffer[eemap_tone5+1];  if (f5==0xffff) { f5=0; }
+    f6=DataBuffer[eemap_tone6]*256+DataBuffer[eemap_tone6+1];  if (f6==0xffff) { f6=0; }
+
+    x.sprintf("%4d", f1); ui->Tone1->setText(x);
+    x.sprintf("%4d", f2); ui->Tone2->setText(x);
+    x.sprintf("%4d", f3); ui->Tone3->setText(x);
+    x.sprintf("%4d", f4); ui->Tone4->setText(x);
+    x.sprintf("%4d", f5); ui->Tone5->setText(x);
+    x.sprintf("%4d", f6); ui->Tone6->setText(x);
+
+    PatternOn = DataBuffer[eemap_pattern_on ];
+    if (PatternOn==0 ) { PatternOn = 1;   }
+    if (PatternOn> 1 ) { PatternOn = PatternOn*10;   }
+    PatternOff=DataBuffer[eemap_pattern_off];
+    if (PatternOff==0 ) { PatternOff = 1;   }
+    if (PatternOff>1 ) { PatternOff= PatternOff*10;  }
+
+    x.sprintf("%4d", PatternOn); ui->PatternOn->setText(x);
+    x.sprintf("%4d", PatternOff); ui->PatternOff->setText(x);
+
+    fadeOn = DataBuffer[eemap_fade_on];
+    if (fadeOn==0 ) { fadeOn=1;  }
+    if (fadeOn>1 ) { fadeOn= fadeOn*10;  }
+    fadeOff=DataBuffer[eemap_fade_off];
+    if (fadeOff==0 ) { fadeOff=1;  }
+    if (fadeOff>1) { fadeOff=fadeOff*10; }
+
+    x.sprintf("%4d", fadeOn ); ui->FadeOn->setText(x);
+    x.sprintf("%4d", fadeOff); ui->FadeOff->setText(x);
+
+    x.sprintf("%4d", DataBuffer[eemap_threshold]*256+DataBuffer[eemap_threshold+1]); ui->Threshold->setText(x);
+    x.sprintf("%4d", DataBuffer[eemap_hysteresis]*256+DataBuffer[eemap_hysteresis+1]); ui->Hysteresis->setText(x);
+
+    NumTones=DataBuffer[eemap_number_of_tones];
+    N=DataBuffer[eemap_number_of_samples]*256+DataBuffer[eemap_number_of_samples+1];
+
+    x.sprintf("%1d",NumTones ); ui->NumTones->setText(x);
+    x.sprintf("%4d",N ); ui->N->setText(x);
+
+    RecalculateFrequencySpacing ();
+
+    // copy bitmap pixels
+    R0H=DataBuffer[bitmap   ]*256+DataBuffer[bitmap +1];
+    R0L=DataBuffer[bitmap+2 ]*256+DataBuffer[bitmap +3];
+
+    x.sprintf("%04X", R0H); ui->Row0H->setText(x);
+    x.sprintf("%04X", R0L); ui->Row0L->setText(x);
 
 
 
-    x.sprintf("%04d", DataBuffer[eemap_pattern_on ]*10); ui->PatternOn->setText(x);
-    x.sprintf("%04d", DataBuffer[eemap_pattern_off]*10); ui->PatternOff->setText(x);
 
-    x.sprintf("%04d", DataBuffer[eemap_threshold]*256+DataBuffer[eemap_threshold+1]); ui->Threshold->setText(x);
-    x.sprintf("%04d", DataBuffer[eemap_hysteresis]*256+DataBuffer[eemap_hysteresis+1]); ui->Hysteresis->setText(x);
+    // I give up... how do you do component arrays in Qt..   brute force wins everytime :)
 
-    x.sprintf("%04d", DataBuffer[eemap_number_of_tones]); ui->NumTones->setText(x);
-    x.sprintf("%04d", DataBuffer[eemap_tone_spacing]*256+DataBuffer[eemap_tone_spacing+1]); ui->ToneSpacing->setText(x);
+    (R0H & 0x8000) ? ui->R0_31->setChecked(true) : ui->R0_31->setChecked(false);
+    (R0H & 0x4000) ? ui->R0_30->setChecked(true) : ui->R0_30->setChecked(false);
+    (R0H & 0x2000) ? ui->R0_29->setChecked(true) : ui->R0_29->setChecked(false);
+    (R0H & 0x1000) ? ui->R0_28->setChecked(true) : ui->R0_28->setChecked(false);
+    (R0H & 0x0800) ? ui->R0_27->setChecked(true) : ui->R0_27->setChecked(false);
+    (R0H & 0x0400) ? ui->R0_26->setChecked(true) : ui->R0_26->setChecked(false);
+    (R0H & 0x0200) ? ui->R0_25->setChecked(true) : ui->R0_25->setChecked(false);
+    (R0H & 0x0100) ? ui->R0_24->setChecked(true) : ui->R0_24->setChecked(false);
+
+    (R0H & 0x0080) ? ui->R0_23->setChecked(true) : ui->R0_23->setChecked(false);
+    (R0H & 0x0040) ? ui->R0_22->setChecked(true) : ui->R0_22->setChecked(false);
+    (R0H & 0x0020) ? ui->R0_21->setChecked(true) : ui->R0_21->setChecked(false);
+    (R0H & 0x0010) ? ui->R0_20->setChecked(true) : ui->R0_20->setChecked(false);
+    (R0H & 0x0008) ? ui->R0_19->setChecked(true) : ui->R0_19->setChecked(false);
+    (R0H & 0x0004) ? ui->R0_18->setChecked(true) : ui->R0_18->setChecked(false);
+    (R0H & 0x0002) ? ui->R0_17->setChecked(true) : ui->R0_17->setChecked(false);
+    (R0H & 0x0001) ? ui->R0_16->setChecked(true) : ui->R0_16->setChecked(false);
+
+    (R0L & 0x8000) ? ui->R0_15->setChecked(true) : ui->R0_15->setChecked(false);
+    (R0L & 0x4000) ? ui->R0_14->setChecked(true) : ui->R0_14->setChecked(false);
+    (R0L & 0x2000) ? ui->R0_13->setChecked(true) : ui->R0_13->setChecked(false);
+    (R0L & 0x1000) ? ui->R0_12->setChecked(true) : ui->R0_12->setChecked(false);
+    (R0L & 0x0800) ? ui->R0_11->setChecked(true) : ui->R0_11->setChecked(false);
+    (R0L & 0x0400) ? ui->R0_10->setChecked(true) : ui->R0_10->setChecked(false);
+    (R0L & 0x0200) ? ui->R0_9->setChecked(true)  : ui->R0_9->setChecked(false);
+    (R0L & 0x0100) ? ui->R0_8->setChecked(true)  : ui->R0_8->setChecked(false);
+
+    (R0L & 0x0080) ? ui->R0_7->setChecked(true)  : ui->R0_7->setChecked(false);
+    (R0L & 0x0040) ? ui->R0_6->setChecked(true)  : ui->R0_6->setChecked(false);
+    (R0L & 0x0020) ? ui->R0_5->setChecked(true)  : ui->R0_5->setChecked(false);
+    (R0L & 0x0010) ? ui->R0_4->setChecked(true)  : ui->R0_4->setChecked(false);
+    (R0L & 0x0008) ? ui->R0_3->setChecked(true)  : ui->R0_3->setChecked(false);
+    (R0L & 0x0004) ? ui->R0_2->setChecked(true)  : ui->R0_2->setChecked(false);
+    (R0L & 0x0002) ? ui->R0_1->setChecked(true)  : ui->R0_1->setChecked(false);
+    (R0L & 0x0001) ? ui->R0_0->setChecked(true)  : ui->R0_0->setChecked(false);
+
+    R1H=DataBuffer[bitmap+4 ]*256+DataBuffer[bitmap +5];
+    R1L=DataBuffer[bitmap+6 ]*256+DataBuffer[bitmap +7];
+
+    x.sprintf("%04X", R1H); ui->Row1H->setText(x);
+    x.sprintf("%04X", R1L); ui->Row1L->setText(x);
+
+    (R1H & 0x8000) ? ui->R1_31->setChecked(true) : ui->R1_31->setChecked(false);
+    (R1H & 0x4000) ? ui->R1_30->setChecked(true) : ui->R1_30->setChecked(false);
+    (R1H & 0x2000) ? ui->R1_29->setChecked(true) : ui->R1_29->setChecked(false);
+    (R1H & 0x1000) ? ui->R1_28->setChecked(true) : ui->R1_28->setChecked(false);
+    (R1H & 0x0800) ? ui->R1_27->setChecked(true) : ui->R1_27->setChecked(false);
+    (R1H & 0x0400) ? ui->R1_26->setChecked(true) : ui->R1_26->setChecked(false);
+    (R1H & 0x0200) ? ui->R1_25->setChecked(true) : ui->R1_25->setChecked(false);
+    (R1H & 0x0100) ? ui->R1_24->setChecked(true) : ui->R1_24->setChecked(false);
+
+    (R1H & 0x0080) ? ui->R1_23->setChecked(true) : ui->R1_23->setChecked(false);
+    (R1H & 0x0040) ? ui->R1_22->setChecked(true) : ui->R1_22->setChecked(false);
+    (R1H & 0x0020) ? ui->R1_21->setChecked(true) : ui->R1_21->setChecked(false);
+    (R1H & 0x0010) ? ui->R1_20->setChecked(true) : ui->R1_20->setChecked(false);
+    (R1H & 0x0008) ? ui->R1_19->setChecked(true) : ui->R1_19->setChecked(false);
+    (R1H & 0x0004) ? ui->R1_18->setChecked(true) : ui->R1_18->setChecked(false);
+    (R1H & 0x0002) ? ui->R1_17->setChecked(true) : ui->R1_17->setChecked(false);
+    (R1H & 0x0001) ? ui->R1_16->setChecked(true) : ui->R1_16->setChecked(false);
+
+    (R1L & 0x8000) ? ui->R1_15->setChecked(true) : ui->R1_15->setChecked(false);
+    (R1L & 0x4000) ? ui->R1_14->setChecked(true) : ui->R1_14->setChecked(false);
+    (R1L & 0x2000) ? ui->R1_13->setChecked(true) : ui->R1_13->setChecked(false);
+    (R1L & 0x1000) ? ui->R1_12->setChecked(true) : ui->R1_12->setChecked(false);
+    (R1L & 0x0800) ? ui->R1_11->setChecked(true) : ui->R1_11->setChecked(false);
+    (R1L & 0x0400) ? ui->R1_10->setChecked(true) : ui->R1_10->setChecked(false);
+    (R1L & 0x0200) ? ui->R1_9->setChecked(true)  : ui->R1_9->setChecked(false);
+    (R1L & 0x0100) ? ui->R1_8->setChecked(true)  : ui->R1_8->setChecked(false);
+
+    (R1L & 0x0080) ? ui->R1_7->setChecked(true)  : ui->R1_7->setChecked(false);
+    (R1L & 0x0040) ? ui->R1_6->setChecked(true)  : ui->R1_6->setChecked(false);
+    (R1L & 0x0020) ? ui->R1_5->setChecked(true)  : ui->R1_5->setChecked(false);
+    (R1L & 0x0010) ? ui->R1_4->setChecked(true)  : ui->R1_4->setChecked(false);
+    (R1L & 0x0008) ? ui->R1_3->setChecked(true)  : ui->R1_3->setChecked(false);
+    (R1L & 0x0004) ? ui->R1_2->setChecked(true)  : ui->R1_2->setChecked(false);
+    (R1L & 0x0002) ? ui->R1_1->setChecked(true)  : ui->R1_1->setChecked(false);
+    (R1L & 0x0001) ? ui->R1_0->setChecked(true)  : ui->R1_0->setChecked(false);
+
+
+    R2H=DataBuffer[bitmap+8 ]*256+DataBuffer[bitmap +9];
+    R2L=DataBuffer[bitmap+10 ]*256+DataBuffer[bitmap +11];
+
+    x.sprintf("%04X", R2H); ui->Row2H->setText(x);
+    x.sprintf("%04X", R2L); ui->Row2L->setText(x);
+
+    (R2H & 0x8000) ? ui->R2_31->setChecked(true) : ui->R2_31->setChecked(false);
+    (R2H & 0x4000) ? ui->R2_30->setChecked(true) : ui->R2_30->setChecked(false);
+    (R2H & 0x2000) ? ui->R2_29->setChecked(true) : ui->R2_29->setChecked(false);
+    (R2H & 0x1000) ? ui->R2_28->setChecked(true) : ui->R2_28->setChecked(false);
+    (R2H & 0x0800) ? ui->R2_27->setChecked(true) : ui->R2_27->setChecked(false);
+    (R2H & 0x0400) ? ui->R2_26->setChecked(true) : ui->R2_26->setChecked(false);
+    (R2H & 0x0200) ? ui->R2_25->setChecked(true) : ui->R2_25->setChecked(false);
+    (R2H & 0x0100) ? ui->R2_24->setChecked(true) : ui->R2_24->setChecked(false);
+
+    (R2H & 0x0080) ? ui->R2_23->setChecked(true) : ui->R2_23->setChecked(false);
+    (R2H & 0x0040) ? ui->R2_22->setChecked(true) : ui->R2_22->setChecked(false);
+    (R2H & 0x0020) ? ui->R2_21->setChecked(true) : ui->R2_21->setChecked(false);
+    (R2H & 0x0010) ? ui->R2_20->setChecked(true) : ui->R2_20->setChecked(false);
+    (R2H & 0x0008) ? ui->R2_19->setChecked(true) : ui->R2_19->setChecked(false);
+    (R2H & 0x0004) ? ui->R2_18->setChecked(true) : ui->R2_18->setChecked(false);
+    (R2H & 0x0002) ? ui->R2_17->setChecked(true) : ui->R2_17->setChecked(false);
+    (R2H & 0x0001) ? ui->R2_16->setChecked(true) : ui->R2_16->setChecked(false);
+
+    (R2L & 0x8000) ? ui->R2_15->setChecked(true) : ui->R2_15->setChecked(false);
+    (R2L & 0x4000) ? ui->R2_14->setChecked(true) : ui->R2_14->setChecked(false);
+    (R2L & 0x2000) ? ui->R2_13->setChecked(true) : ui->R2_13->setChecked(false);
+    (R2L & 0x1000) ? ui->R2_12->setChecked(true) : ui->R2_12->setChecked(false);
+    (R2L & 0x0800) ? ui->R2_11->setChecked(true) : ui->R2_11->setChecked(false);
+    (R2L & 0x0400) ? ui->R2_10->setChecked(true) : ui->R2_10->setChecked(false);
+    (R2L & 0x0200) ? ui->R2_9->setChecked(true)  : ui->R2_9->setChecked(false);
+    (R2L & 0x0100) ? ui->R2_8->setChecked(true)  : ui->R2_8->setChecked(false);
+
+    (R2L & 0x0080) ? ui->R2_7->setChecked(true)  : ui->R2_7->setChecked(false);
+    (R2L & 0x0040) ? ui->R2_6->setChecked(true)  : ui->R2_6->setChecked(false);
+    (R2L & 0x0020) ? ui->R2_5->setChecked(true)  : ui->R2_5->setChecked(false);
+    (R2L & 0x0010) ? ui->R2_4->setChecked(true)  : ui->R2_4->setChecked(false);
+    (R2L & 0x0008) ? ui->R2_3->setChecked(true)  : ui->R2_3->setChecked(false);
+    (R2L & 0x0004) ? ui->R2_2->setChecked(true)  : ui->R2_2->setChecked(false);
+    (R2L & 0x0002) ? ui->R2_1->setChecked(true)  : ui->R2_1->setChecked(false);
+    (R2L & 0x0001) ? ui->R2_0->setChecked(true)  : ui->R2_0->setChecked(false);
+
+
+    R3H=DataBuffer[bitmap+12 ]*256+DataBuffer[bitmap +13];
+    R3L=DataBuffer[bitmap+14 ]*256+DataBuffer[bitmap +15];
+
+    x.sprintf("%04X", R3H); ui->Row3H->setText(x);
+    x.sprintf("%04X", R3L); ui->Row3L->setText(x);
+
+    (R3H & 0x8000) ? ui->R3_31->setChecked(true) : ui->R3_31->setChecked(false);
+    (R3H & 0x4000) ? ui->R3_30->setChecked(true) : ui->R3_30->setChecked(false);
+    (R3H & 0x2000) ? ui->R3_29->setChecked(true) : ui->R3_29->setChecked(false);
+    (R3H & 0x1000) ? ui->R3_28->setChecked(true) : ui->R3_28->setChecked(false);
+    (R3H & 0x0800) ? ui->R3_27->setChecked(true) : ui->R3_27->setChecked(false);
+    (R3H & 0x0400) ? ui->R3_26->setChecked(true) : ui->R3_26->setChecked(false);
+    (R3H & 0x0200) ? ui->R3_25->setChecked(true) : ui->R3_25->setChecked(false);
+    (R3H & 0x0100) ? ui->R3_24->setChecked(true) : ui->R3_24->setChecked(false);
+
+    (R3H & 0x0080) ? ui->R3_23->setChecked(true) : ui->R3_23->setChecked(false);
+    (R3H & 0x0040) ? ui->R3_22->setChecked(true) : ui->R3_22->setChecked(false);
+    (R3H & 0x0020) ? ui->R3_21->setChecked(true) : ui->R3_21->setChecked(false);
+    (R3H & 0x0010) ? ui->R3_20->setChecked(true) : ui->R3_20->setChecked(false);
+    (R3H & 0x0008) ? ui->R3_19->setChecked(true) : ui->R3_19->setChecked(false);
+    (R3H & 0x0004) ? ui->R3_18->setChecked(true) : ui->R3_18->setChecked(false);
+    (R3H & 0x0002) ? ui->R3_17->setChecked(true) : ui->R3_17->setChecked(false);
+    (R3H & 0x0001) ? ui->R3_16->setChecked(true) : ui->R3_16->setChecked(false);
+
+    (R3L & 0x8000) ? ui->R3_15->setChecked(true) : ui->R3_15->setChecked(false);
+    (R3L & 0x4000) ? ui->R3_14->setChecked(true) : ui->R3_14->setChecked(false);
+    (R3L & 0x2000) ? ui->R3_13->setChecked(true) : ui->R3_13->setChecked(false);
+    (R3L & 0x1000) ? ui->R3_12->setChecked(true) : ui->R3_12->setChecked(false);
+    (R3L & 0x0800) ? ui->R3_11->setChecked(true) : ui->R3_11->setChecked(false);
+    (R3L & 0x0400) ? ui->R3_10->setChecked(true) : ui->R3_10->setChecked(false);
+    (R3L & 0x0200) ? ui->R3_9->setChecked(true)  : ui->R3_9->setChecked(false);
+    (R3L & 0x0100) ? ui->R3_8->setChecked(true)  : ui->R3_8->setChecked(false);
+
+    (R3L & 0x0080) ? ui->R3_7->setChecked(true)  : ui->R3_7->setChecked(false);
+    (R3L & 0x0040) ? ui->R3_6->setChecked(true)  : ui->R3_6->setChecked(false);
+    (R3L & 0x0020) ? ui->R3_5->setChecked(true)  : ui->R3_5->setChecked(false);
+    (R3L & 0x0010) ? ui->R3_4->setChecked(true)  : ui->R3_4->setChecked(false);
+    (R3L & 0x0008) ? ui->R3_3->setChecked(true)  : ui->R3_3->setChecked(false);
+    (R3L & 0x0004) ? ui->R3_2->setChecked(true)  : ui->R3_2->setChecked(false);
+    (R3L & 0x0002) ? ui->R3_1->setChecked(true)  : ui->R3_1->setChecked(false);
+    (R3L & 0x0001) ? ui->R3_0->setChecked(true)  : ui->R3_0->setChecked(false);
+
 
     freq=DataBuffer[eemap_radio_frequency]*256+DataBuffer[eemap_radio_frequency+1];
     f=((float)(freq)+0.005)/100;
-
     ui->RadioFrequency->setValue(f);
+
+    if (DataBuffer[eemap_antenna_type_address]== 0x00)
+    {
+        ui->ExternalAntenna->setChecked(true);
+        ui->InternalAntenna->setChecked(false);
+    }
+    else
+    {
+        ui->InternalAntenna->setChecked(true);
+        ui->ExternalAntenna->setChecked(false);
+    }
 
     x.sprintf("%02d", DataBuffer[eemap_firmware_version_major]);
     y.sprintf("%02d", DataBuffer[eemap_firmware_version_minor]);
@@ -1424,25 +1701,31 @@ void MainWindow::CopyBufferToScreen()
         ui->Tone4->setEnabled(false);
         ui->Tone5->setEnabled(false);
         ui->Tone6->setEnabled(false);
-        //ui->NumTones->setEnabled(false);
-        //ui->ToneSpacing->setEnabled(false);
         ui->Threshold->setEnabled(false);
         ui->Hysteresis->setEnabled(false);
         ui->StartModeFrame->setEnabled(false);
         ui->OutputModeFrame->setEnabled(false);
+        ui->RadioFrequency->setEnabled(false);
+        ui->InternalAntenna->setEnabled(false);
+        ui->ExternalAntenna->setEnabled(false);
+        ui->bitmap_frame->setEnabled(false);
+        x.sprintf("%4d",500 ); ui->N->setText(x);
+        UpdateNumberOfTones();
+
     }
     else {
 
         ui->Tone4->setEnabled(true);
         ui->Tone5->setEnabled(true);
         ui->Tone6->setEnabled(true);
-        //ui->NumTones->setEnabled(true);
-        //ui->ToneSpacing->setEnabled(true);
         ui->Threshold->setEnabled(true);
         ui->Hysteresis->setEnabled(true);
         ui->StartModeFrame->setEnabled(true);
         ui->OutputModeFrame->setEnabled(true);
-
+        ui->RadioFrequency->setEnabled(true);
+        ui->InternalAntenna->setEnabled(true);
+        ui->ExternalAntenna->setEnabled(true);
+        ui->bitmap_frame->setEnabled(true);
     }
 }
 
@@ -1454,6 +1737,7 @@ void MainWindow::ScreenToBuffer()
     int n;
     bool ok;
     float f;
+    int R0L, R0H, R1L, R1H, R2L, R2H, R3L, R3H;
 
     if (ui->radioButtonBlink->isChecked()==true)          { DataBuffer[eemap_startup_mode] = 0x01;  }
     if (ui->radioButtonBreath->isChecked()==true)         { DataBuffer[eemap_startup_mode] = 0x02;  }
@@ -1462,15 +1746,27 @@ void MainWindow::ScreenToBuffer()
     if (ui->radioButtonSignalStrength->isChecked()==true) { DataBuffer[eemap_startup_mode] = 0x05;  }
     if (ui->radioButtonToneEnable->isChecked()==true)     { DataBuffer[eemap_startup_mode] = 0x06;  }
     if (ui->radioToneDecodeDisabled->isChecked()==true)   { DataBuffer[eemap_startup_mode] = 0x07;  }
+    if (ui->radioButtonBitMapMode->isChecked()==true)     { DataBuffer[eemap_startup_mode] = 0x08;  }
+
+    if (ui->GoertzelDisplay->isChecked()==true)  { DataBuffer[eemap_serial_mode] = 0x01; }
+    if (ui->RDSdataDisplay->isChecked()==true)   { DataBuffer[eemap_serial_mode] = 0x02; }
+    if (ui->RDSgroup6Display->isChecked()==true) { DataBuffer[eemap_serial_mode] = 0x03; }
+    if (ui->rssiDisplay->isChecked()==true)      { DataBuffer[eemap_serial_mode] = 0x04; }
+    if (ui->bitmapDisplay->isChecked()==true)    { DataBuffer[eemap_serial_mode] = 0x05; }
 
     if (ui->RadioButtonPWMDisable->isChecked()==true)     { DataBuffer[eemap_output_mode] = 0x01; }
     if (ui->RadioButtonPWMEnable->isChecked()==true)      { DataBuffer[eemap_output_mode] = 0x02; }
     if (ui->RadioButtonRGBEnable->isChecked()==true)      { DataBuffer[eemap_output_mode] = 0x03; }
+    if (ui->RadioButtonOutputToggle->isChecked()==true)   { DataBuffer[eemap_output_mode] = 0x04; }
+    if (ui->RadioButtonPWMMagnitude->isChecked()==true)   { DataBuffer[eemap_output_mode] = 0x05; }
 
     n = ui->DeviceAddress->text().toInt(&ok,16);  DataBuffer[eemap_device_serial ]=(n>>8)&0xff; DataBuffer[eemap_device_serial+1 ]=n&0xff;
     n = ui->GroupAddress1->text().toInt(&ok,16);  DataBuffer[eemap_group_address1]=(n>>8)&0xff; DataBuffer[eemap_group_address1+1]=n&0xff;
     n = ui->GroupAddress2->text().toInt(&ok,16);  DataBuffer[eemap_group_address2]=(n>>8)&0xff; DataBuffer[eemap_group_address2+1]=n&0xff;
     n = ui->GroupAddress3->text().toInt(&ok,16);  DataBuffer[eemap_group_address3]=(n>>8)&0xff; DataBuffer[eemap_group_address3+1]=n&0xff;
+    n = ui->GroupAddress4->text().toInt(&ok,16);  DataBuffer[eemap_group_address4]=(n>>8)&0xff; DataBuffer[eemap_group_address4+1]=n&0xff;
+    n = ui->GroupAddress5->text().toInt(&ok,16);  DataBuffer[eemap_group_address5]=(n>>8)&0xff; DataBuffer[eemap_group_address5+1]=n&0xff;
+    n = ui->GroupAddress6->text().toInt(&ok,16);  DataBuffer[eemap_group_address6]=(n>>8)&0xff; DataBuffer[eemap_group_address6+1]=n&0xff;
 
     n = ui->Tone1->text().toInt(&ok,10); DataBuffer[eemap_tone1]=(n>>8)&0xff; DataBuffer[eemap_tone1+1]=n&0xff;
     n = ui->Tone2->text().toInt(&ok,10); DataBuffer[eemap_tone2]=(n>>8)&0xff; DataBuffer[eemap_tone2+1]=n&0xff;
@@ -1479,18 +1775,237 @@ void MainWindow::ScreenToBuffer()
     n = ui->Tone5->text().toInt(&ok,10); DataBuffer[eemap_tone5]=(n>>8)&0xff; DataBuffer[eemap_tone5+1]=n&0xff;
     n = ui->Tone6->text().toInt(&ok,10); DataBuffer[eemap_tone6]=(n>>8)&0xff; DataBuffer[eemap_tone6+1]=n&0xff;
 
-    n = ui->PatternOn->text().toInt(&ok,10);  DataBuffer[eemap_pattern_on ]=(n/10)&0xff;
-    n = ui->PatternOff->text().toInt(&ok,10); DataBuffer[eemap_pattern_off]=(n/10)&0xff;
+    n = ui->PatternOn->text().toInt(&ok,10);
+    if (n==0)  { n=1; }
+    if (n>10)  { n=n/10; }
+    if (n>255) { n=255; }
+    DataBuffer[eemap_pattern_on ]=n;
+
+    n = ui->PatternOff->text().toInt(&ok,10);
+    if (n==0)  { n=1; }
+    if (n>10)  { n=n/10; }
+    if (n>255) { n=255; }
+    DataBuffer[eemap_pattern_off]=n;
+
+    n = ui->FadeOn->text().toInt(&ok,10);
+    if (n==0)  { n=1; }
+    if (n>10)  { n=n/10; }
+    if (n>255) { n=255; }
+    DataBuffer[eemap_fade_on]=n;
+
+    n = ui->FadeOff->text().toInt(&ok,10);
+    if (n==0)  { n=1; }
+    if (n>10)  { n=n/10; }
+    if (n>255) { n=255; }
+    DataBuffer[eemap_fade_off]=n;
 
     n = ui->Threshold->text().toInt(&ok,10);  DataBuffer[eemap_threshold]=(n>>8)&0xff;  DataBuffer[eemap_threshold+1 ]=n&0xff;
     n = ui->Hysteresis->text().toInt(&ok,10); DataBuffer[eemap_hysteresis]=(n>>8)&0xff; DataBuffer[eemap_hysteresis+1]=n&0xff;
 
     n = ui->NumTones->text().toInt(&ok,10);    DataBuffer[eemap_number_of_tones]=n&0xff;
-    n = ui->ToneSpacing->text().toInt(&ok,10); DataBuffer[eemap_tone_spacing]=(n>>8)&0xff; DataBuffer[eemap_tone_spacing+1]=n&0xff;
+    n = ui->N->text().toInt(&ok,10); DataBuffer[eemap_number_of_samples]=(n>>8)&0xff; DataBuffer[eemap_number_of_samples+1]=n&0xff;
 
-    f = ui->RadioFrequency->text().toDouble(&ok);
+    x = ui->RadioFrequency->cleanText();
+
+    x.replace(",", ".");
+
+    f = x.toDouble(&ok);
     f = f + 0.005;
     n = (int)(f*100); DataBuffer[eemap_radio_frequency]=(n>>8)&0xff; DataBuffer[eemap_radio_frequency+1]=n&0xff;
+
+    if (ui->ExternalAntenna->isChecked()==true)      { DataBuffer[eemap_antenna_type_address] = 0x00; }
+    if (ui->InternalAntenna->isChecked()==true)      { DataBuffer[eemap_antenna_type_address] = 0x01; }
+
+    if (ui->radioButtonRememberStation->isChecked()==true ) { DataBuffer[eemap_save_station] = 0x01; }
+    if (ui->radioButtonRememberStation->isChecked()==false) { DataBuffer[eemap_save_station] = 0x00; }
+
+    R0L=0; R0H=0;
+    if (ui->R0_0->isChecked())  R0L|= 0x0001;
+    if (ui->R0_1->isChecked())  R0L|= 0x0002;
+    if (ui->R0_2->isChecked())  R0L|= 0x0004;
+    if (ui->R0_3->isChecked())  R0L|= 0x0008;
+
+    if (ui->R0_4->isChecked())  R0L|= 0x0010;
+    if (ui->R0_5->isChecked())  R0L|= 0x0020;
+    if (ui->R0_6->isChecked())  R0L|= 0x0040;
+    if (ui->R0_7->isChecked())  R0L|= 0x0080;
+
+    if (ui->R0_8->isChecked())  R0L|= 0x0100;
+    if (ui->R0_9->isChecked())  R0L|= 0x0200;
+    if (ui->R0_10->isChecked()) R0L|= 0x0400;
+    if (ui->R0_11->isChecked()) R0L|= 0x0800;
+
+    if (ui->R0_12->isChecked()) R0L|= 0x1000;
+    if (ui->R0_13->isChecked()) R0L|= 0x2000;
+    if (ui->R0_14->isChecked()) R0L|= 0x4000;
+    if (ui->R0_15->isChecked()) R0L|= 0x8000;
+
+    if (ui->R0_16->isChecked())  R0H|= 0x0001;
+    if (ui->R0_17->isChecked())  R0H|= 0x0002;
+    if (ui->R0_18->isChecked())  R0H|= 0x0004;
+    if (ui->R0_19->isChecked())  R0H|= 0x0008;
+
+    if (ui->R0_20->isChecked())  R0H|= 0x0010;
+    if (ui->R0_21->isChecked())  R0H|= 0x0020;
+    if (ui->R0_22->isChecked())  R0H|= 0x0040;
+    if (ui->R0_23->isChecked())  R0H|= 0x0080;
+
+    if (ui->R0_24->isChecked())  R0H|= 0x0100;
+    if (ui->R0_25->isChecked())  R0H|= 0x0200;
+    if (ui->R0_26->isChecked())  R0H|= 0x0400;
+    if (ui->R0_27->isChecked())  R0H|= 0x0800;
+
+    if (ui->R0_28->isChecked())  R0H|= 0x1000;
+    if (ui->R0_29->isChecked())  R0H|= 0x2000;
+    if (ui->R0_30->isChecked())  R0H|= 0x4000;
+    if (ui->R0_31->isChecked())  R0H|= 0x8000;
+
+    x.sprintf("%04X", R0H); ui->Row0H->setText(x);
+    x.sprintf("%04X", R0L); ui->Row0L->setText(x);
+
+    DataBuffer[bitmap +0] =(R0H>>8)&0xff;    DataBuffer[bitmap+1]=R0H&0xff;
+    DataBuffer[bitmap +2] =(R0L>>8)&0xff;    DataBuffer[bitmap+3]=R0L&0xff;
+
+    R1L=0; R1H=0;
+    if (ui->R1_0->isChecked())  R1L|= 0x0001;
+    if (ui->R1_1->isChecked())  R1L|= 0x0002;
+    if (ui->R1_2->isChecked())  R1L|= 0x0004;
+    if (ui->R1_3->isChecked())  R1L|= 0x0008;
+
+    if (ui->R1_4->isChecked())  R1L|= 0x0010;
+    if (ui->R1_5->isChecked())  R1L|= 0x0020;
+    if (ui->R1_6->isChecked())  R1L|= 0x0040;
+    if (ui->R1_7->isChecked())  R1L|= 0x0080;
+
+    if (ui->R1_8->isChecked())  R1L|= 0x0100;
+    if (ui->R1_9->isChecked())  R1L|= 0x0200;
+    if (ui->R1_10->isChecked()) R1L|= 0x0400;
+    if (ui->R1_11->isChecked()) R1L|= 0x0800;
+
+    if (ui->R1_12->isChecked()) R1L|= 0x1000;
+    if (ui->R1_13->isChecked()) R1L|= 0x2000;
+    if (ui->R1_14->isChecked()) R1L|= 0x4000;
+    if (ui->R1_15->isChecked()) R1L|= 0x8000;
+
+    if (ui->R1_16->isChecked())  R1H|= 0x0001;
+    if (ui->R1_17->isChecked())  R1H|= 0x0002;
+    if (ui->R1_18->isChecked())  R1H|= 0x0004;
+    if (ui->R1_19->isChecked())  R1H|= 0x0008;
+
+    if (ui->R1_20->isChecked())  R1H|= 0x0010;
+    if (ui->R1_21->isChecked())  R1H|= 0x0020;
+    if (ui->R1_22->isChecked())  R1H|= 0x0040;
+    if (ui->R1_23->isChecked())  R1H|= 0x0080;
+
+    if (ui->R1_24->isChecked())  R1H|= 0x0100;
+    if (ui->R1_25->isChecked())  R1H|= 0x0200;
+    if (ui->R1_26->isChecked())  R1H|= 0x0400;
+    if (ui->R1_27->isChecked())  R1H|= 0x0800;
+
+    if (ui->R1_28->isChecked())  R1H|= 0x1000;
+    if (ui->R1_29->isChecked())  R1H|= 0x2000;
+    if (ui->R1_30->isChecked())  R1H|= 0x4000;
+    if (ui->R1_31->isChecked())  R1H|= 0x8000;
+
+    x.sprintf("%04X", R1H); ui->Row1H->setText(x);
+    x.sprintf("%04X", R1L); ui->Row1L->setText(x);
+
+    DataBuffer[bitmap +4] =(R1H>>8)&0xff;    DataBuffer[bitmap+5]=R1H&0xff;
+    DataBuffer[bitmap +6] =(R1L>>8)&0xff;    DataBuffer[bitmap+7]=R1L&0xff;
+
+    R2L=0; R2H=0;
+    if (ui->R2_0->isChecked())  R2L|= 0x0001;
+    if (ui->R2_1->isChecked())  R2L|= 0x0002;
+    if (ui->R2_2->isChecked())  R2L|= 0x0004;
+    if (ui->R2_3->isChecked())  R2L|= 0x0008;
+
+    if (ui->R2_4->isChecked())  R2L|= 0x0010;
+    if (ui->R2_5->isChecked())  R2L|= 0x0020;
+    if (ui->R2_6->isChecked())  R2L|= 0x0040;
+    if (ui->R2_7->isChecked())  R2L|= 0x0080;
+
+    if (ui->R2_8->isChecked())  R2L|= 0x0100;
+    if (ui->R2_9->isChecked())  R2L|= 0x0200;
+    if (ui->R2_10->isChecked()) R2L|= 0x0400;
+    if (ui->R2_11->isChecked()) R2L|= 0x0800;
+
+    if (ui->R2_12->isChecked()) R2L|= 0x1000;
+    if (ui->R2_13->isChecked()) R2L|= 0x2000;
+    if (ui->R2_14->isChecked()) R2L|= 0x4000;
+    if (ui->R2_15->isChecked()) R2L|= 0x8000;
+
+    if (ui->R2_16->isChecked())  R2H|= 0x0001;
+    if (ui->R2_17->isChecked())  R2H|= 0x0002;
+    if (ui->R2_18->isChecked())  R2H|= 0x0004;
+    if (ui->R2_19->isChecked())  R2H|= 0x0008;
+
+    if (ui->R2_20->isChecked())  R2H|= 0x0010;
+    if (ui->R2_21->isChecked())  R2H|= 0x0020;
+    if (ui->R2_22->isChecked())  R2H|= 0x0040;
+    if (ui->R2_23->isChecked())  R2H|= 0x0080;
+
+    if (ui->R2_24->isChecked())  R2H|= 0x0100;
+    if (ui->R2_25->isChecked())  R2H|= 0x0200;
+    if (ui->R2_26->isChecked())  R2H|= 0x0400;
+    if (ui->R2_27->isChecked())  R2H|= 0x0800;
+
+    if (ui->R2_28->isChecked())  R2H|= 0x1000;
+    if (ui->R2_29->isChecked())  R2H|= 0x2000;
+    if (ui->R2_30->isChecked())  R2H|= 0x4000;
+    if (ui->R2_31->isChecked())  R2H|= 0x8000;
+
+    x.sprintf("%04X", R2H); ui->Row2H->setText(x);
+    x.sprintf("%04X", R2L); ui->Row2L->setText(x);
+
+    DataBuffer[bitmap +8]  =(R2H>>8)&0xff;    DataBuffer[bitmap +9]=R2H&0xff;
+    DataBuffer[bitmap +10] =(R2L>>8)&0xff;    DataBuffer[bitmap+11]=R2L&0xff;
+
+    R3L=0; R3H=0;
+    if (ui->R3_0->isChecked())  R3L|= 0x0001;
+    if (ui->R3_1->isChecked())  R3L|= 0x0002;
+    if (ui->R3_2->isChecked())  R3L|= 0x0004;
+    if (ui->R3_3->isChecked())  R3L|= 0x0008;
+
+    if (ui->R3_4->isChecked())  R3L|= 0x0010;
+    if (ui->R3_5->isChecked())  R3L|= 0x0020;
+    if (ui->R3_6->isChecked())  R3L|= 0x0040;
+    if (ui->R3_7->isChecked())  R3L|= 0x0080;
+
+    if (ui->R3_8->isChecked())  R3L|= 0x0100;
+    if (ui->R3_9->isChecked())  R3L|= 0x0200;
+    if (ui->R3_10->isChecked()) R3L|= 0x0400;
+    if (ui->R3_11->isChecked()) R3L|= 0x0800;
+
+    if (ui->R3_12->isChecked()) R3L|= 0x1000;
+    if (ui->R3_13->isChecked()) R3L|= 0x2000;
+    if (ui->R3_14->isChecked()) R3L|= 0x4000;
+    if (ui->R3_15->isChecked()) R3L|= 0x8000;
+
+    if (ui->R3_16->isChecked())  R3H|= 0x0001;
+    if (ui->R3_17->isChecked())  R3H|= 0x0002;
+    if (ui->R3_18->isChecked())  R3H|= 0x0004;
+    if (ui->R3_19->isChecked())  R3H|= 0x0008;
+
+    if (ui->R3_20->isChecked())  R3H|= 0x0010;
+    if (ui->R3_21->isChecked())  R3H|= 0x0020;
+    if (ui->R3_22->isChecked())  R3H|= 0x0040;
+    if (ui->R3_23->isChecked())  R3H|= 0x0080;
+
+    if (ui->R3_24->isChecked())  R3H|= 0x0100;
+    if (ui->R3_25->isChecked())  R3H|= 0x0200;
+    if (ui->R3_26->isChecked())  R3H|= 0x0400;
+    if (ui->R3_27->isChecked())  R3H|= 0x0800;
+
+    if (ui->R3_28->isChecked())  R3H|= 0x1000;
+    if (ui->R3_29->isChecked())  R3H|= 0x2000;
+    if (ui->R3_30->isChecked())  R3H|= 0x4000;
+    if (ui->R3_31->isChecked())  R3H|= 0x8000;
+
+    x.sprintf("%04X", R3H); ui->Row3H->setText(x);
+    x.sprintf("%04X", R3L); ui->Row3L->setText(x);
+
+    DataBuffer[bitmap +12] =(R3H>>8)&0xff;  DataBuffer[bitmap +13]=R3H&0xff;
+    DataBuffer[bitmap +14] =(R3L>>8)&0xff;  DataBuffer[bitmap +15]=R3L&0xff;
 
 
 }
@@ -1507,6 +2022,44 @@ void MainWindow::HexDumpBuffer()
     ee << "0xF0030 = "; for (i=0;i<16;i++) { x.sprintf("%02X ",DataBuffer[i+0x30]);  ee << x; } ee << "\n";
     ui->plainTextEdit->appendPlainText(eeMsg);
 
+}
+
+void MainWindow::ReadDeviceRDSaddress ()
+{
+    // read RDS device ADDR before re-flashing so address can be preserved.
+
+    Comm::ErrorCode result;
+    DeviceData::MemoryRange deviceRange, hexRange;
+    bool failureDetected = false;
+    QString x;
+    QString eeMsg;
+    QTextStream ee(&eeMsg);
+
+
+    if(!comm->isConnected())
+    {
+        failed = -1;
+        qWarning("Device not connected");
+        return;
+    }
+
+    result = comm->GetData(0xF00000,40,1,1,0xF00040,DataBuffer);
+
+    if(result != Comm::Success)
+    {
+        failureDetected = true;
+        qWarning("Error reading device.");
+
+    }
+    else
+    {
+
+        ADDR = DataBuffer[eemap_device_serial ]*256+DataBuffer[eemap_device_serial+1 ];
+        x.sprintf("%04X ",ADDR);
+        ee << "Reading RDS ADDR="; ee << x; ee << "\n";
+        ui->plainTextEdit->appendPlainText(eeMsg);
+
+    }
 }
 
 void MainWindow::on_actionReadEEPROM_triggered()
@@ -1541,7 +2094,7 @@ void MainWindow::on_actionReadEEPROM_triggered()
 
         HexDumpBuffer();
         CopyBufferToScreen();
-
+        UpdateNumberOfTones();
     }
 }
 
@@ -1729,5 +2282,131 @@ void MainWindow::on_actionRadioButtonRGBEnable_triggered()
     ui->plainTextEdit->appendPlainText("RGB Mode Selected\n");
 }
 
+void MainWindow::UpdateNumberOfTones()
+{
+    QString x;
+    bool ok;
+    int n,f1,f2,f3,f4,f5,f6;
+
+    n=0;
+
+    f1 = ui->Tone1->text().toInt(&ok,10); if (f1) n++;
+    f2 = ui->Tone2->text().toInt(&ok,10); if (f2) n++;
+    f3 = ui->Tone3->text().toInt(&ok,10); if (f3) n++;
+    f4 = ui->Tone4->text().toInt(&ok,10); if (f4) n++;
+    f5 = ui->Tone5->text().toInt(&ok,10); if (f5) n++;
+    f6 = ui->Tone6->text().toInt(&ok,10); if (f6) n++;
+
+    x.sprintf("%d",n); ui->NumTones->setText(x);
+
+    NumTones = ui->NumTones->text().toInt(&ok,10);
+    N = ui->N->text().toInt(&ok,10);
+
+    SampleTime = (N * 1000)/37500;
+    CycleTime = NumTones * SampleTime;
+    FreqSpacing = 1733/SampleTime;
+
+    x.sprintf("%d",FreqSpacing); ui->FreqSpacing->setText(x);
+    x.sprintf("%d",SampleTime); ui->SampleTime->setText(x);
+    x.sprintf("%d",CycleTime); ui->CycleTime->setText(x);
+
+}
 
 
+void MainWindow::on_FreqSpacing_returnPressed()
+{
+    QString x;
+    bool ok;
+
+    NumTones = ui->NumTones->text().toInt(&ok,10);
+    FreqSpacing = ui->FreqSpacing->text().toInt(&ok,10);
+
+    N = 65000/FreqSpacing;
+    SampleTime = (N * 1000)/37500;
+    CycleTime=SampleTime*NumTones;
+
+    x.sprintf("%d",N); ui->N->setText(x);
+    x.sprintf("%d",FreqSpacing); ui->FreqSpacing->setText(x);
+    x.sprintf("%d",SampleTime); ui->SampleTime->setText(x);
+    x.sprintf("%d",CycleTime); ui->CycleTime->setText(x);
+
+}
+
+
+void MainWindow::on_CycleTime_returnPressed()
+{
+    QString x;
+    bool ok;
+
+    NumTones = ui->NumTones->text().toInt(&ok,10);
+    CycleTime = ui->CycleTime->text().toInt(&ok,10);
+
+    SampleTime = CycleTime/NumTones;
+    N = SampleTime*37500/1000;
+    FreqSpacing = 65000/N;
+
+    x.sprintf("%d",N); ui->N->setText(x);
+    x.sprintf("%d",FreqSpacing); ui->FreqSpacing->setText(x);
+    x.sprintf("%d",SampleTime); ui->SampleTime->setText(x);
+
+}
+
+
+void MainWindow::on_Tone1_returnPressed()
+{
+    UpdateNumberOfTones();
+
+}
+
+void MainWindow::on_Tone2_returnPressed()
+{
+    UpdateNumberOfTones();
+
+}
+
+void MainWindow::on_Tone3_returnPressed()
+{
+    UpdateNumberOfTones();
+
+}
+
+void MainWindow::on_Tone4_returnPressed()
+{
+    UpdateNumberOfTones();
+
+}
+
+void MainWindow::on_Tone5_returnPressed()
+{
+    UpdateNumberOfTones();
+
+}
+
+void MainWindow::on_Tone6_returnPressed()
+{
+    UpdateNumberOfTones();
+
+}
+
+
+void MainWindow::on_actionLSE_Help_Resources_triggered()
+{
+    QString msg;
+    QTextStream stream(&msg);
+
+    QMessageBox help(this);
+
+    help.setWindowTitle("Linzer Schnitte Help Resources");
+    help.setTextFormat(Qt::RichText);
+
+    stream << "LS 2014 " << VERSION << "<br>";
+    stream << "<br>";
+    stream << "Linzer Schnitte Help Resources Source Files and Howto videos can be accessed at the following locations<br><br>";
+    stream << "<a href=\"http://www.aec.at/linzerschnitte\">http://www.aec.at/linzerschnitte</a><br><br>";
+    stream << "<a href=\"https://github.com/RayGardiner/LinzerSchnitte-\">https://github.com/RayGardiner/LinzerSchnitte-</a><br><br>";
+    stream << "<a href=\"https://github.com/NeuralSpaz\">https://github.com/NeuralSpaz</a><br><br>";
+
+    help.setText(msg);
+    help.exec();
+
+}
