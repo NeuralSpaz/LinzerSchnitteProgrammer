@@ -6,6 +6,7 @@
 # Command: /usr/lib/i386-linux-gnu/qt5/bin/qmake -spec linux-g++ -o Makefile HIDAPI.pro
 #############################################################################
 
+
 MAKEFILE      = Makefile
 
 ####### Compiler, tools and options

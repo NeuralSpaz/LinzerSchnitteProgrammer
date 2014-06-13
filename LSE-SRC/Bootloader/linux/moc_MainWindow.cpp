@@ -6,6 +6,7 @@
 ** WARNING! All changes made in this file will be lost!
 *****************************************************************************/
 
+
 #include "../MainWindow.h"
 #include <QtCore/qbytearray.h>
 #include <QtCore/qmetatype.h>

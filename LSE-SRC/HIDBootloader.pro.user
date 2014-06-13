@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 3.1.1, 2014-06-13T06:06:21. -->
+<!-- Written by QtCreator 3.1.1, 2014-06-13T06:06:21.  -->
 <qtcreator>
  <data>
   <variable>ProjectExplorer.Project.ActiveTarget</variable>
@@ -202,3 +202,4 @@
   <value type="int">15</value>
  </data>
 </qtcreator>
+

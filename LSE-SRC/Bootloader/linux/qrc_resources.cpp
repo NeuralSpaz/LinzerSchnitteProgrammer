@@ -6,6 +6,7 @@
 ** WARNING! All changes made in this file will be lost!
 *****************************************************************************/
 
+
 #include <QtCore/qglobal.h>
 
 static const unsigned char qt_resource_data[] = {
